@@ -7,6 +7,11 @@
 <p>
   支持普通图片、附件图片、裸图片链接，以及常见第三方图床链接。对于 Gofile 链接，会自动解析其中的图片和视频；视频会显示封面或占位预览，点击后可在弹窗中播放。
 </p>
+
+<p>
+  使用方式:复制js到油猴里面添加新脚本
+</p>
+
 <p>
   
   <img src="https://p.inari.site/guest/26-06/16/6a31513987e19.png" alt="South Plus Media Preview 截图" style="max-width:100%; border-radius:6px;">
