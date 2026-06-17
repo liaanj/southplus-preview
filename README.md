@@ -14,7 +14,7 @@
    有任何建议欢迎加群交流！后续内测版也会在群里发放~
 </p>
 <p>
-  <img src="https://img.cdn1.vip/i/6a3285c0ac84f_1781695936.webp" width="400">
+  <img src="https://img.cdn1.vip/i/6a328d27c873e_1781697831.png" width="400">
 </p>
 
 <h3>主要功能</h3>
