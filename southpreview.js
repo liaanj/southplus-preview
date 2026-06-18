@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         South Plus Media Preview
 // @namespace    https://bbs.level-plus.net/
-// @version      1.0.0
+// @version      1.0.1
 // @description  在南+列表页标题下方预览楼主图片和第三方媒体，支持 Gofile 图片/视频封面与弹窗播放。
-// @author       Codex
+// @author       起飞的蛋糕
+// @license      MIT
 // @match        *://*.east-plus.net/*
 // @match        *://east-plus.net/*
 // @match        *://*.south-plus.net/*
@@ -99,11 +100,20 @@
   init();
 
   function init() {
+    if (!isThreadListPage()) {
+      cleanup();
+      return;
+    }
+
     injectStyle();
     cleanup();
     bindWheelScroll();
     scanAndEnqueue();
     observeChanges();
+  }
+
+  function isThreadListPage() {
+    return /(?:^|\/)thread\.php(?:$|[?#])/i.test(location.pathname + location.search + location.hash);
   }
 
   function bindWheelScroll() {
@@ -214,11 +224,27 @@
   function collectTitleLinks() {
     const links = [];
     for (const row of document.querySelectorAll("tr")) {
-      const rowLinks = Array.from(row.querySelectorAll('a[href*="read.php?tid-"]'));
+      const rowLinks = Array.from(row.querySelectorAll('a[href*="read.php?tid-"]')).filter(isListThreadLink);
       const titleLink = chooseTitleLink(row, rowLinks);
       if (titleLink) links.push(titleLink);
     }
     return links;
+  }
+
+  function isListThreadLink(link) {
+    const href = link.getAttribute("href") || "";
+    if (!href) return false;
+    if (/authorid-|uid-|page-\d+|pid-|#\d+|#pid/i.test(href)) return false;
+    if (link.closest(".readtext, .tpc_content, .c, .quote, .blockquote, .tiptop, .floot, .user-info")) return false;
+
+    try {
+      const url = new URL(href, location.href);
+      if (!/\/read\.php$/i.test(url.pathname)) return false;
+      const params = url.search || "";
+      return /^\?tid-\d+(?:-fpage-\d+)?(?:\.html)?$/i.test(params);
+    } catch (error) {
+      return /^read\.php\?tid-\d+(?:-fpage-\d+)?(?:\.html)?$/i.test(href);
+    }
   }
 
   function chooseTitleLink(row, links) {
@@ -242,6 +268,7 @@
     const cell = link.closest("td");
     if (!text || text.length < 2) return -1000;
     if (state.seenNodes.has(link)) return -1000;
+    if (!isListThreadLink(link)) return -1000;
     if (/[?&]page=|#\d+$|pid-/i.test(href)) return -50;
 
     const cells = Array.from(row.children).filter((node) => node.tagName === "TD" || node.tagName === "TH");
