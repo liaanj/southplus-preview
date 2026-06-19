@@ -113,7 +113,9 @@
   }
 
   function isThreadListPage() {
-    return /(?:^|\/)thread\.php(?:$|[?#])/i.test(location.pathname + location.search + location.hash);
+    const url = new URL(location.href);
+    if (/(?:^|\/)thread\.php$/i.test(url.pathname)) return true;
+    return isSimpleIndexUrl(url) && !isSimpleThreadUrl(url);
   }
 
   function bindWheelScroll() {
@@ -193,7 +195,7 @@
       if (CONFIG.maxThreads > 0 && state.found >= CONFIG.maxThreads) continue;
 
       const text = (link.textContent || "").trim();
-      const row = link.closest("tr");
+      const row = findThreadContainer(link);
       const cell = findTitleCell(link);
       if (!text || !row || !cell) continue;
 
@@ -201,7 +203,7 @@
 
       const item = {
         tid,
-        url: new URL(link.getAttribute("href"), location.href).href,
+        url: detailUrlForLink(link, tid),
         link,
         row,
         cell,
@@ -228,22 +230,28 @@
       const titleLink = chooseTitleLink(row, rowLinks);
       if (titleLink) links.push(titleLink);
     }
+    for (const item of document.querySelectorAll('li[class*="author_"]')) {
+      const itemLinks = Array.from(item.querySelectorAll("a[href]")).filter(isListThreadLink);
+      const titleLink = chooseTitleLink(item, itemLinks);
+      if (titleLink) links.push(titleLink);
+    }
     return links;
   }
 
   function isListThreadLink(link) {
     const href = link.getAttribute("href") || "";
     if (!href) return false;
-    if (/authorid-|uid-|page-\d+|pid-|#\d+|#pid/i.test(href)) return false;
+    if (/authorid-|uid-|pid-|#\d+|#pid/i.test(href)) return false;
     if (link.closest(".readtext, .tpc_content, .c, .quote, .blockquote, .tiptop, .floot, .user-info")) return false;
 
     try {
       const url = new URL(href, location.href);
+      if (isSimpleIndexUrl(url)) return isSimpleThreadUrl(url);
       if (!/\/read\.php$/i.test(url.pathname)) return false;
       const params = url.search || "";
       return /^\?tid-\d+(?:-fpage-\d+)?(?:\.html)?$/i.test(params);
     } catch (error) {
-      return /^read\.php\?tid-\d+(?:-fpage-\d+)?(?:\.html)?$/i.test(href);
+      return /^(?:simple\/)?index\.php\?t\d+(?:\.html)?$/i.test(href) || /^\?t\d+(?:\.html)?$/i.test(href) || /^read\.php\?tid-\d+(?:-fpage-\d+)?(?:\.html)?$/i.test(href);
     }
   }
 
@@ -265,7 +273,7 @@
   function scoreTitleLink(row, link) {
     const text = (link.textContent || "").trim();
     const href = link.getAttribute("href") || "";
-    const cell = link.closest("td");
+    const cell = link.closest("td, li");
     if (!text || text.length < 2) return -1000;
     if (state.seenNodes.has(link)) return -1000;
     if (!isListThreadLink(link)) return -1000;
@@ -277,18 +285,26 @@
     if (cell && cell.querySelector("h3")) score += 60;
     if (link.closest("h3")) score += 80;
     if (cell && /subject|title|tal|f14|thread/i.test(cell.className || "")) score += 30;
+    if (row.tagName === "LI" && /(?:^|\s)author_\d+(?:\s|$)/i.test(row.className || "")) score += 80;
     if (cellIndex >= 0 && cellIndex <= 2) score += 40;
     if (cellIndex >= 3) score -= 70;
     return score;
   }
 
+  function findThreadContainer(link) {
+    return link.closest("tr") || link.closest('li[class*="author_"]');
+  }
+
   function findTitleCell(link) {
-    return link.closest("td") || link.parentElement;
+    return link.closest("td") || link.closest('li[class*="author_"]') || link.parentElement;
   }
 
   function ensureSlot(link, cell, tid) {
     let slot = cell.querySelector(`.${CONFIG.slotClass}[data-spv-tid="${tid}"]`);
-    if (slot) return slot;
+    if (slot) {
+      normalizeSimpleItemLayout(cell, link, slot);
+      return slot;
+    }
 
     slot = document.createElement("div");
     slot.className = CONFIG.slotClass;
@@ -296,6 +312,7 @@
 
     const titleBlock = findTitleBlock(link, cell);
     titleBlock.insertAdjacentElement("afterend", slot);
+    normalizeSimpleItemLayout(cell, link, slot);
     return slot;
   }
 
@@ -305,9 +322,57 @@
     return node || link;
   }
 
+  function normalizeSimpleItemLayout(cell, titleLink, slot) {
+    if (!isSimpleListItem(cell) || !titleLink || !slot) return;
+
+    titleLink.classList.add("spv-mobile-title");
+
+    let meta = cell.querySelector(".spv-mobile-meta");
+    if (!meta) {
+      meta = document.createElement("div");
+      meta.className = "spv-mobile-meta";
+    }
+
+    for (const node of Array.from(titleLink.querySelectorAll(".by"))) {
+      meta.appendChild(node);
+    }
+
+    for (const node of Array.from(cell.childNodes)) {
+      if (node === titleLink || node === slot || node === meta) continue;
+      if (node.nodeType === Node.ELEMENT_NODE && node.matches(`.${CONFIG.slotClass}, .${CONFIG.stripClass}`)) continue;
+      if (node.nodeType === Node.TEXT_NODE && !node.textContent.trim()) continue;
+      meta.appendChild(node);
+    }
+
+    slot.insertAdjacentElement("afterend", meta);
+    if (!meta.textContent.trim() && !meta.children.length) meta.remove();
+  }
+
+  function isSimpleListItem(node) {
+    return node && node.tagName === "LI" && /(?:^|\s)author_\d+(?:\s|$)/i.test(node.className || "");
+  }
+
   function getTid(url) {
-    const match = String(url || "").match(/read\.php\?tid-(\d+)/i);
-    return match ? match[1] : "";
+    const match = String(url || "").match(/read\.php\?tid-(\d+)|(?:^|[?&])t(\d+)(?=\D|$)/i);
+    if (match) return match[1] || match[2] || "";
+    return "";
+  }
+
+  function detailUrlForLink(link, tid) {
+    const raw = link.getAttribute("href") || "";
+    const absolute = new URL(raw, location.href);
+    if (isSimpleIndexUrl(absolute) && tid) {
+      return new URL(`read.php?tid-${tid}.html`, location.origin + "/").href;
+    }
+    return absolute.href;
+  }
+
+  function isSimpleIndexUrl(url) {
+    return /(?:^|\/)simple\/(?:index\.php)?$/i.test(url.pathname);
+  }
+
+  function isSimpleThreadUrl(url) {
+    return /^\?t\d+(?:(?:-|(?:-?page-))\d+)?(?:\.html)?$/i.test(url.search || "");
   }
 
   function enqueueItem(item) {
@@ -1196,7 +1261,10 @@
       }
 
       .${CONFIG.stripClass} {
-        display: block;
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: flex-start;
+        gap: 6px;
         width: calc(100vw - 420px);
         min-width: 180px;
         max-width: 100%;
@@ -1223,18 +1291,73 @@
         display: none;
       }
 
+      @media (max-width: 760px) {
+        .${CONFIG.stripClass} {
+          width: 100%;
+          min-width: 0;
+        }
+      }
+
+      .spv-mobile-meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 8px;
+        margin: 3px 0 0;
+        color: #777;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      li[class*="author_"] > a.spv-mobile-title {
+        padding: 0 !important;
+        box-shadow: none !important;
+        text-shadow: none !important;
+      }
+
+      .spv-mobile-meta:empty {
+        display: none;
+      }
+
+      .spv-mobile-meta .num,
+      .spv-mobile-meta .by,
+      .spv-mobile-meta span,
+      .spv-mobile-meta a {
+        float: none !important;
+        position: static !important;
+        display: inline !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        line-height: inherit !important;
+      }
+
+      .spv-mobile-meta .by {
+        color: inherit !important;
+        font-weight: normal !important;
+      }
+
+      .spv-mobile-meta .num {
+        margin-left: auto !important;
+        white-space: nowrap !important;
+      }
+
       .spv-media {
         position: relative;
-        display: inline-block;
+        display: block;
+        flex: 0 0 92px;
         width: 92px;
         height: 68px;
-        margin-right: 6px;
+        margin-right: 0;
+        padding: 0 !important;
         border: 1px solid rgba(0, 0, 0, 0.12);
         border-radius: 5px;
         background: #f4f5f7;
         box-sizing: border-box;
         vertical-align: top;
         overflow: hidden;
+        line-height: 0;
+        font-size: 0;
+        text-decoration: none;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
         transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
       }
@@ -1249,6 +1372,10 @@
         display: block;
         width: 100%;
         height: 100%;
+        max-width: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
         object-fit: cover;
       }
 
