@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         South Plus Media Preview
 // @namespace    https://bbs.level-plus.net/
-// @version      1.0.7
+// @version      1.0.9
 // @description  在南+列表页标题下方预览楼主图片和第三方媒体，支持标题 iframe 弹窗、Gofile 图片/视频封面与弹窗播放。
 // @author       起飞的蛋糕
 // @license      MIT
@@ -49,6 +49,7 @@
 
   const CONFIG = {
     maxThreads: 0,
+    maxExcerptLength: 240,
     maxImagesPerThread: 24,
     maxHostPageResolves: 6,
     autoBuyFreeContent: true,
@@ -66,7 +67,10 @@
     titleDrawerMinWidthPx: 520,
     titleDrawerMaxRatio: 0.82,
     titleDrawerWidthKey: "spv:title-drawer-width",
+    excerptEnabled: true,
+    excerptEnabledKey: "spv:excerpt-enabled",
     slotClass: "spv-slot",
+    excerptClass: "spv-excerpt",
     stripClass: "spv-strip",
     badgeClass: "spv-badge",
   };
@@ -327,6 +331,26 @@
     }
   }
 
+  function isExcerptEnabled() {
+    try {
+      const saved = localStorage.getItem(CONFIG.excerptEnabledKey);
+      if (saved === "0") return false;
+      if (saved === "1") return true;
+    } catch (error) {
+      debugWarn("excerpt setting read failed", error);
+    }
+
+    return CONFIG.excerptEnabled;
+  }
+
+  function setExcerptEnabled(enabled) {
+    try {
+      localStorage.setItem(CONFIG.excerptEnabledKey, enabled ? "1" : "0");
+    } catch (error) {
+      debugWarn("excerpt setting write failed", error);
+    }
+  }
+
   function renderTitleIframeToggle() {
     document.querySelectorAll(".spv-title-toggle").forEach((node) => node.remove());
 
@@ -361,6 +385,27 @@
     wrapper.classList.toggle("spv-title-toggle-off", select.value === "off");
     wrapper.appendChild(text);
     wrapper.appendChild(select);
+
+    const excerptLabel = document.createElement("label");
+    excerptLabel.className = "spv-title-toggle-check";
+    excerptLabel.title = "标题下方显示一楼文字摘要";
+
+    const excerptInput = document.createElement("input");
+    excerptInput.type = "checkbox";
+    excerptInput.checked = isExcerptEnabled();
+
+    const excerptText = document.createElement("span");
+    excerptText.textContent = "文字";
+
+    excerptInput.addEventListener("change", () => {
+      setExcerptEnabled(excerptInput.checked);
+      document.documentElement.classList.toggle("spv-hide-excerpt", !excerptInput.checked);
+    });
+
+    excerptLabel.appendChild(excerptInput);
+    excerptLabel.appendChild(excerptText);
+    wrapper.appendChild(excerptLabel);
+    document.documentElement.classList.toggle("spv-hide-excerpt", !excerptInput.checked);
     document.body.appendChild(wrapper);
   }
 
@@ -643,11 +688,13 @@
     const urls = new Set();
     const author = detectAuthor(doc);
     const docs = [{ doc, url: threadUrl }];
+    let excerpt = "";
 
     let scanned = 0;
     for (const page of docs) {
       for (const post of collectAuthorPosts(page.doc, author)) {
         scanned += 1;
+        if (!excerpt) excerpt = extractPostExcerpt(post.content);
         collectMediaUrls(urls, post.content, page.url);
         if (urls.size >= CONFIG.maxImagesPerThread) break;
       }
@@ -656,7 +703,10 @@
 
     if (!scanned) {
       const firstPost = doc.querySelector("#read_tpc") || doc.querySelector(".tpc_content");
-      if (firstPost) collectMediaUrls(urls, firstPost, threadUrl);
+      if (firstPost) {
+        excerpt = extractPostExcerpt(firstPost);
+        collectMediaUrls(urls, firstPost, threadUrl);
+      }
     }
 
     const normalized = normalizeUrlList(urls);
@@ -667,8 +717,29 @@
       images,
       hostPages,
       media: [],
+      excerpt,
       note: "",
     };
+  }
+
+  function extractPostExcerpt(content) {
+    if (!content) return "";
+
+    const clone = content.cloneNode(true);
+    clone
+      .querySelectorAll("script, style, noscript, iframe, img, video, audio, object, embed, input, button, select, textarea, .quote, .blockquote, blockquote, .readbot, .signature, .sigline")
+      .forEach((node) => node.remove());
+
+    let text = htmlDecode(clone.textContent || "")
+      .replace(/\b(?:https?:)?\/\/\S+/gi, " ")
+      .replace(/\[(?:img|url|quote|size|color|b|i|u|align)[^\]]*\]/gi, " ")
+      .replace(/\[\/(?:img|url|quote|size|color|b|i|u|align)\]/gi, " ")
+      .replace(/(?:复制代码|本帖最近评分记录|附件|图片|下载次数|售价|隐藏内容)/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (text.length > CONFIG.maxExcerptLength) text = `${text.slice(0, CONFIG.maxExcerptLength).trim()}...`;
+    return text;
   }
 
   function collectMediaUrls(urls, root, baseUrl) {
@@ -1093,6 +1164,9 @@
     const hasImages = result.images && result.images.length;
     const hasMedia = result.media && result.media.length;
     const hasHostPages = result.hostPages && result.hostPages.length;
+    const excerpt = normalizeExcerpt(result.excerpt);
+
+    if (excerpt) renderExcerpt(item, excerpt);
 
     if (hasHostPages) renderBadge(item, result.hostPages);
 
@@ -1114,6 +1188,18 @@
       }
     }
 
+  }
+
+  function normalizeExcerpt(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function renderExcerpt(item, excerpt) {
+    const node = document.createElement("div");
+    node.className = CONFIG.excerptClass;
+    node.dataset.spvTid = item.tid;
+    node.textContent = excerpt;
+    item.slot.appendChild(node);
   }
 
   function renderBadge(item, hostPages) {
@@ -1529,7 +1615,7 @@
 
   function removeExisting(item) {
     item.slot
-      .querySelectorAll(`.${CONFIG.stripClass}[data-spv-tid="${item.tid}"], .${CONFIG.badgeClass}[data-spv-tid="${item.tid}"]`)
+      .querySelectorAll(`.${CONFIG.excerptClass}[data-spv-tid="${item.tid}"], .${CONFIG.stripClass}[data-spv-tid="${item.tid}"], .${CONFIG.badgeClass}[data-spv-tid="${item.tid}"]`)
       .forEach((node) => node.remove());
   }
 
@@ -1557,7 +1643,7 @@
   }
 
   function cacheKey(tid) {
-    return `spv:thread-media:v4:${tid}`;
+    return `spv:thread-media:v5:${tid}`;
   }
 
   function unique() {
@@ -1583,6 +1669,26 @@
         min-width: 100%;
         max-width: 100%;
         overflow: hidden;
+      }
+
+      .${CONFIG.excerptClass} {
+        display: -webkit-box;
+        width: calc(100vw - 420px);
+        min-width: 180px;
+        max-width: 100%;
+        margin: 4px 0 2px;
+        overflow: hidden;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        color: #888;
+        font-size: 11px;
+        line-height: 1.45;
+        white-space: normal;
+        word-break: break-word;
+      }
+
+      html.spv-hide-excerpt .${CONFIG.excerptClass} {
+        display: none;
       }
 
       .${CONFIG.stripClass} {
@@ -1617,6 +1723,7 @@
       }
 
       @media (max-width: 760px) {
+        .${CONFIG.excerptClass},
         .${CONFIG.stripClass} {
           width: 100%;
           min-width: 0;
@@ -1804,6 +1911,21 @@
         background: transparent;
         color: inherit;
         font: inherit;
+        cursor: pointer;
+      }
+
+      .spv-title-toggle-check {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        margin-left: 3px;
+        cursor: pointer;
+      }
+
+      .spv-title-toggle-check input {
+        width: 12px;
+        height: 12px;
+        margin: 0;
         cursor: pointer;
       }
 
