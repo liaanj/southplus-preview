@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         South Plus Media Preview
 // @namespace    https://bbs.level-plus.net/
-// @version      1.0.1
-// @description  在南+列表页标题下方预览楼主图片和第三方媒体，支持 Gofile 图片/视频封面与弹窗播放。
+// @version      1.0.7
+// @description  在南+列表页标题下方预览楼主图片和第三方媒体，支持标题 iframe 弹窗、Gofile 图片/视频封面与弹窗播放。
 // @author       起飞的蛋糕
 // @license      MIT
 // @match        *://*.east-plus.net/*
@@ -59,6 +59,13 @@
     cacheTtlMs: 12 * 60 * 60 * 1000,
     scanDebounceMs: 300,
     debug: false,
+    titlePreviewMode: "popup",
+    titlePreviewModeKey: "spv:title-preview-mode",
+    legacyTitleIframeSettingKey: "spv:title-iframe-enabled",
+    titleDrawerDefaultWidthPx: 920,
+    titleDrawerMinWidthPx: 520,
+    titleDrawerMaxRatio: 0.82,
+    titleDrawerWidthKey: "spv:title-drawer-width",
     slotClass: "spv-slot",
     stripClass: "spv-strip",
     badgeClass: "spv-badge",
@@ -87,6 +94,8 @@
     wheelStrip: null,
     wheelDelta: 0,
     wheelFrame: 0,
+    titleIframeBound: new WeakSet(),
+    savedBodyPaddingRight: "",
   };
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -107,6 +116,7 @@
 
     injectStyle();
     cleanup();
+    renderTitleIframeToggle();
     bindWheelScroll();
     scanAndEnqueue();
     observeChanges();
@@ -159,8 +169,11 @@
 
   function cleanup() {
     document
-      .querySelectorAll(`.${CONFIG.slotClass}, .spv-panel, .spv-lightbox, .lp-preview-slot, .lp-preview-panel, .lp-preview-lightbox`)
+      .querySelectorAll(`.${CONFIG.slotClass}, .spv-panel, .spv-lightbox, .spv-drawer, .spv-title-toggle, .lp-preview-slot, .lp-preview-panel, .lp-preview-lightbox`)
       .forEach((node) => node.remove());
+    document.documentElement.classList.remove("spv-drawer-open", "spv-drawer-resizing");
+    document.documentElement.style.removeProperty("--spv-drawer-width");
+    document.body.style.paddingRight = state.savedBodyPaddingRight || "";
     document
       .querySelectorAll(".lp-preview-strip, .lp-preview-badge, .lp-preview-status")
       .forEach((node) => node.remove());
@@ -209,6 +222,8 @@
         cell,
         slot: ensureSlot(link, cell, tid),
       };
+
+      bindTitleIframeOpen(link, item.url, text);
 
       if (state.seenTids.has(tid)) {
         const cached = readCache(tid);
@@ -268,6 +283,124 @@
     }
 
     return bestScore > 0 ? best : null;
+  }
+
+  function bindTitleIframeOpen(link, url, title) {
+    if (state.titleIframeBound.has(link)) return;
+
+    state.titleIframeBound.add(link);
+    link.addEventListener("click", (event) => {
+      const mode = getTitlePreviewMode();
+      if (mode === "off") return;
+      if (event.defaultPrevented) return;
+      if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+      const targetUrl = url || detailUrlForLink(link, getTid(link.href || link.getAttribute("href")));
+      if (!targetUrl) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      openTitlePreview(targetUrl, title || (link.textContent || "").trim(), mode);
+    });
+  }
+
+  function getTitlePreviewMode() {
+    try {
+      const saved = localStorage.getItem(CONFIG.titlePreviewModeKey);
+      if (saved === "off" || saved === "popup" || saved === "drawer") return saved;
+
+      const legacy = localStorage.getItem(CONFIG.legacyTitleIframeSettingKey);
+      if (legacy === "0") return "off";
+      if (legacy === "1") return "popup";
+    } catch (error) {
+      debugWarn("title preview mode read failed", error);
+    }
+
+    return CONFIG.titlePreviewMode;
+  }
+
+  function setTitlePreviewMode(mode) {
+    try {
+      localStorage.setItem(CONFIG.titlePreviewModeKey, mode);
+    } catch (error) {
+      debugWarn("title preview mode write failed", error);
+    }
+  }
+
+  function renderTitleIframeToggle() {
+    document.querySelectorAll(".spv-title-toggle").forEach((node) => node.remove());
+
+    const wrapper = document.createElement("label");
+    wrapper.className = "spv-title-toggle";
+    wrapper.title = "标题点击预览方式";
+
+    const text = document.createElement("span");
+    text.textContent = "预览";
+
+    const select = document.createElement("select");
+    const options = [
+      ["popup", "弹窗"],
+      ["drawer", "侧栏"],
+      ["off", "关闭"],
+    ];
+
+    for (const [value, label] of options) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      select.appendChild(option);
+    }
+
+    select.value = getTitlePreviewMode();
+    select.addEventListener("change", () => {
+      setTitlePreviewMode(select.value);
+      wrapper.classList.toggle("spv-title-toggle-off", select.value === "off");
+      if (select.value !== "drawer") closeDrawer();
+    });
+
+    wrapper.classList.toggle("spv-title-toggle-off", select.value === "off");
+    wrapper.appendChild(text);
+    wrapper.appendChild(select);
+    document.body.appendChild(wrapper);
+  }
+
+  function getDrawerWidthPx() {
+    const maxWidth = getDrawerMaxWidthPx();
+    let width = Math.min(CONFIG.titleDrawerDefaultWidthPx, maxWidth);
+
+    try {
+      const saved = parseInt(localStorage.getItem(CONFIG.titleDrawerWidthKey) || "", 10);
+      if (Number.isFinite(saved) && saved > 0) width = saved;
+    } catch (error) {
+      debugWarn("title drawer width read failed", error);
+    }
+
+    return clampDrawerWidth(width);
+  }
+
+  function setDrawerWidthPx(width) {
+    const next = clampDrawerWidth(width);
+    document.documentElement.style.setProperty("--spv-drawer-width", `${next}px`);
+    document.body.style.paddingRight = `${next}px`;
+    return next;
+  }
+
+  function saveDrawerWidthPx(width) {
+    try {
+      localStorage.setItem(CONFIG.titleDrawerWidthKey, String(clampDrawerWidth(width)));
+    } catch (error) {
+      debugWarn("title drawer width write failed", error);
+    }
+  }
+
+  function clampDrawerWidth(width) {
+    const maxWidth = getDrawerMaxWidthPx();
+    const minWidth = Math.min(CONFIG.titleDrawerMinWidthPx, maxWidth);
+    return Math.max(minWidth, Math.min(maxWidth, Math.round(width || CONFIG.titleDrawerDefaultWidthPx)));
+  }
+
+  function getDrawerMaxWidthPx() {
+    return Math.max(CONFIG.titleDrawerMinWidthPx, Math.floor(window.innerWidth * CONFIG.titleDrawerMaxRatio));
   }
 
   function scoreTitleLink(row, link) {
@@ -1093,6 +1226,7 @@
 
   function openLightbox(media) {
     closeLightbox();
+    closeDrawer();
 
     const overlay = document.createElement("div");
     overlay.className = "spv-lightbox";
@@ -1133,6 +1267,186 @@
     document.body.appendChild(overlay);
     document.documentElement.classList.add("spv-lightbox-open");
     document.addEventListener("keydown", handleLightboxKey);
+  }
+
+  function openTitlePreview(url, title, mode) {
+    if (mode === "drawer") {
+      openThreadDrawer(url, title);
+      return;
+    }
+
+    openThreadIframe(url, title);
+  }
+
+  function createThreadFrameShell(url, title) {
+    const shell = document.createElement("div");
+    shell.className = "spv-iframe-shell";
+
+    const header = document.createElement("div");
+    header.className = "spv-iframe-header";
+
+    const heading = document.createElement("div");
+    heading.className = "spv-iframe-title";
+    heading.textContent = title || "帖子详情";
+
+    const open = document.createElement("a");
+    open.href = url;
+    open.target = "_blank";
+    open.rel = "noreferrer";
+    open.textContent = "新窗口打开";
+
+    header.appendChild(heading);
+    header.appendChild(open);
+
+    const body = document.createElement("div");
+    body.className = "spv-iframe-body";
+
+    const iframe = document.createElement("iframe");
+    iframe.src = url;
+    iframe.loading = "eager";
+    iframe.referrerPolicy = "no-referrer-when-downgrade";
+    iframe.setAttribute("allowfullscreen", "allowfullscreen");
+    iframe.title = title || "帖子详情";
+    body.appendChild(iframe);
+
+    shell.appendChild(header);
+    shell.appendChild(body);
+    return shell;
+  }
+
+  function openThreadIframe(url, title) {
+    closeLightbox();
+    closeDrawer();
+
+    const overlay = document.createElement("div");
+    overlay.className = "spv-lightbox spv-iframe-lightbox";
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) closeLightbox();
+    });
+
+    const shell = createThreadFrameShell(url, title);
+
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "spv-close";
+    close.textContent = "×";
+    close.addEventListener("click", closeLightbox);
+
+    overlay.appendChild(shell);
+    overlay.appendChild(close);
+    document.body.appendChild(overlay);
+    document.documentElement.classList.add("spv-lightbox-open");
+    document.addEventListener("keydown", handleLightboxKey);
+  }
+
+  function openThreadDrawer(url, title) {
+    closeLightbox();
+
+    const width = getDrawerWidthPx();
+    const existing = document.querySelector(".spv-drawer");
+    if (existing) {
+      const oldShell = existing.querySelector(".spv-iframe-shell");
+      const nextShell = createThreadFrameShell(url, title);
+      const close = createDrawerCloseButton();
+      nextShell.appendChild(close);
+      if (oldShell) oldShell.replaceWith(nextShell);
+      else existing.appendChild(nextShell);
+      document.documentElement.classList.add("spv-drawer-open");
+      setDrawerWidthPx(width);
+      document.addEventListener("keydown", handleLightboxKey);
+      return;
+    }
+
+    state.savedBodyPaddingRight = document.body.style.paddingRight || "";
+
+    const drawer = document.createElement("div");
+    drawer.className = "spv-drawer";
+
+    const resizer = document.createElement("div");
+    resizer.className = "spv-drawer-resizer";
+    resizer.title = "拖动调整宽度";
+    resizer.addEventListener("pointerdown", startDrawerResize);
+
+    const shell = createThreadFrameShell(url, title);
+    const close = createDrawerCloseButton();
+
+    shell.appendChild(close);
+    drawer.appendChild(resizer);
+    drawer.appendChild(shell);
+    document.body.appendChild(drawer);
+    document.documentElement.classList.add("spv-drawer-open");
+    setDrawerWidthPx(width);
+
+    requestAnimationFrame(() => {
+      drawer.classList.add("spv-drawer-visible");
+    });
+    document.addEventListener("keydown", handleLightboxKey);
+  }
+
+  function createDrawerCloseButton() {
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "spv-drawer-close";
+    close.textContent = "×";
+    close.addEventListener("click", closeDrawer);
+    return close;
+  }
+
+  function startDrawerResize(event) {
+    if (event.button != null && event.button !== 0) return;
+    if (event.cancelable) event.preventDefault();
+    const handle = event.currentTarget;
+    if (handle && typeof handle.setPointerCapture === "function") {
+      handle.setPointerCapture(event.pointerId);
+    }
+
+    document.documentElement.classList.add("spv-drawer-resizing");
+    let nextWidth = getDrawerWidthPxFromCss();
+    let frame = 0;
+
+    const move = (moveEvent) => {
+      if (moveEvent.cancelable) moveEvent.preventDefault();
+      nextWidth = window.innerWidth - moveEvent.clientX;
+      if (!frame) {
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          setDrawerWidthPx(nextWidth);
+        });
+      }
+    };
+
+    const end = (endEvent) => {
+      if (endEvent && endEvent.cancelable) endEvent.preventDefault();
+      if (frame) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      }
+      const width = setDrawerWidthPx(nextWidth);
+      document.documentElement.classList.remove("spv-drawer-resizing");
+      saveDrawerWidthPx(width);
+      if (handle && typeof handle.releasePointerCapture === "function" && endEvent) {
+        try {
+          handle.releasePointerCapture(endEvent.pointerId);
+        } catch (error) {
+          debugWarn("drawer pointer release failed", error);
+        }
+      }
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      handle.removeEventListener("lostpointercapture", end);
+    };
+
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+    handle.addEventListener("lostpointercapture", end);
+  }
+
+  function getDrawerWidthPxFromCss() {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue("--spv-drawer-width");
+    const width = parseFloat(raw);
+    return Number.isFinite(width) ? width : getDrawerWidthPx();
   }
 
   function renderLightboxVideo(body, media) {
@@ -1198,8 +1512,19 @@
     document.removeEventListener("keydown", handleLightboxKey);
   }
 
+  function closeDrawer() {
+    const drawer = document.querySelector(".spv-drawer");
+    if (drawer) drawer.remove();
+    document.documentElement.classList.remove("spv-drawer-open", "spv-drawer-resizing");
+    document.documentElement.style.removeProperty("--spv-drawer-width");
+    document.body.style.paddingRight = state.savedBodyPaddingRight || "";
+    document.removeEventListener("keydown", handleLightboxKey);
+  }
+
   function handleLightboxKey(event) {
-    if (event.key === "Escape") closeLightbox();
+    if (event.key !== "Escape") return;
+    closeLightbox();
+    closeDrawer();
   }
 
   function removeExisting(item) {
@@ -1444,6 +1769,48 @@
         background: #fff;
       }
 
+      .spv-title-toggle {
+        position: fixed;
+        right: 12px;
+        bottom: 12px;
+        z-index: 99999;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 6px;
+        border: 1px solid rgba(0, 0, 0, 0.16);
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.88);
+        color: #333;
+        font-size: 12px;
+        line-height: 1.4;
+        cursor: pointer;
+        user-select: none;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+      }
+
+      html.spv-drawer-open .spv-title-toggle {
+        right: calc(12px + var(--spv-drawer-width));
+      }
+
+      .spv-title-toggle:hover {
+        background: #fff;
+      }
+
+      .spv-title-toggle select {
+        margin: 0;
+        padding: 0 14px 0 3px;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .spv-title-toggle-off {
+        opacity: 0.62;
+      }
+
       .spv-lightbox {
         position: fixed;
         inset: 0;
@@ -1543,6 +1910,183 @@
 
       .spv-lightbox-footer a:hover {
         background: rgba(255, 255, 255, 0.26);
+      }
+
+      .spv-drawer {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 100000;
+        width: var(--spv-drawer-width);
+        background: #fff;
+        box-shadow: -12px 0 30px rgba(0, 0, 0, 0.24);
+        transform: translateX(102%);
+        transition: transform 0.22s ease;
+      }
+
+      .spv-drawer-resizer {
+        position: absolute;
+        left: -5px;
+        top: 0;
+        bottom: 0;
+        z-index: 2;
+        width: 10px;
+        cursor: col-resize;
+        touch-action: none;
+      }
+
+      .spv-drawer-resizer::after {
+        content: "";
+        position: absolute;
+        left: 4px;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: rgba(47, 95, 157, 0);
+        transition: background 0.15s ease;
+      }
+
+      .spv-drawer-resizer:hover::after,
+      html.spv-drawer-resizing .spv-drawer-resizer::after {
+        background: rgba(47, 95, 157, 0.5);
+      }
+
+      html.spv-drawer-resizing,
+      html.spv-drawer-resizing body {
+        cursor: col-resize !important;
+        user-select: none !important;
+      }
+
+      html.spv-drawer-resizing .spv-drawer iframe {
+        pointer-events: none;
+      }
+
+      .spv-drawer-visible {
+        transform: translateX(0);
+      }
+
+      html.spv-drawer-open body {
+        transition: padding-right 0.22s ease;
+        box-sizing: border-box;
+      }
+
+      .spv-iframe-lightbox {
+        padding: 34px 42px;
+      }
+
+      .spv-iframe-shell {
+        display: flex;
+        flex-direction: column;
+        width: min(1120px, 92vw);
+        height: min(860px, 88vh);
+        border-radius: 7px;
+        overflow: hidden;
+        background: #fff;
+        box-shadow: 0 18px 52px rgba(0, 0, 0, 0.42);
+      }
+
+      .spv-drawer .spv-iframe-shell {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      .spv-iframe-header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        min-height: 40px;
+        padding: 0 14px;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+        background: #f7f8fa;
+        box-sizing: border-box;
+      }
+
+      .spv-drawer .spv-iframe-header {
+        padding-right: 48px;
+      }
+
+      .spv-iframe-title {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        color: #222;
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 40px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .spv-iframe-header a {
+        flex: 0 0 auto;
+        color: #2f5f9d;
+        font-size: 12px;
+        line-height: 1.5;
+        text-decoration: none;
+      }
+
+      .spv-iframe-header a:hover {
+        text-decoration: underline;
+      }
+
+      .spv-iframe-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        background: #fff;
+      }
+
+      .spv-iframe-body iframe {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: #fff;
+      }
+
+      .spv-drawer-close {
+        position: absolute;
+        right: 9px;
+        top: 6px;
+        width: 28px;
+        height: 28px;
+        border: 0;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.06);
+        color: #333;
+        font-size: 20px;
+        line-height: 26px;
+        cursor: pointer;
+      }
+
+      .spv-drawer-close:hover {
+        background: rgba(0, 0, 0, 0.12);
+      }
+
+      @media (max-width: 760px) {
+        html.spv-drawer-open .spv-title-toggle {
+          right: 12px;
+        }
+
+        .spv-drawer {
+          width: 100vw;
+        }
+
+        html.spv-drawer-open body {
+          padding-right: 0 !important;
+        }
+
+        .spv-iframe-lightbox {
+          padding: 18px 10px;
+        }
+
+        .spv-iframe-shell {
+          width: 100%;
+          height: 92vh;
+        }
       }
 
     `;
