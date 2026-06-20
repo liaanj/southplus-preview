@@ -100,6 +100,7 @@
     wheelFrame: 0,
     titleIframeBound: new WeakSet(),
     savedBodyPaddingRight: "",
+    layoutFrame: 0,
   };
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -188,6 +189,7 @@
     observer.observe(document.body, { childList: true, subtree: true });
     window.addEventListener("popstate", scheduleScan);
     window.addEventListener("hashchange", scheduleScan);
+    window.addEventListener("resize", schedulePreviewLayout, { passive: true });
     setInterval(scheduleScan, 3000);
   }
 
@@ -427,6 +429,7 @@
     const next = clampDrawerWidth(width);
     document.documentElement.style.setProperty("--spv-drawer-width", `${next}px`);
     document.body.style.paddingRight = `${next}px`;
+    schedulePreviewLayout();
     return next;
   }
 
@@ -479,7 +482,9 @@
 
   function ensureSlot(link, cell, tid) {
     let slot = cell.querySelector(`.${CONFIG.slotClass}[data-spv-tid="${tid}"]`);
+    const titleBlock = findTitleBlock(link, cell);
     if (slot) {
+      preparePreviewLayout(link, cell, slot, titleBlock);
       normalizeSimpleItemLayout(cell, link, slot);
       return slot;
     }
@@ -488,7 +493,7 @@
     slot.className = CONFIG.slotClass;
     slot.dataset.spvTid = tid;
 
-    const titleBlock = findTitleBlock(link, cell);
+    preparePreviewLayout(link, cell, slot, titleBlock);
     titleBlock.insertAdjacentElement("afterend", slot);
     normalizeSimpleItemLayout(cell, link, slot);
     return slot;
@@ -498,6 +503,34 @@
     let node = link;
     while (node.parentElement && node.parentElement !== cell) node = node.parentElement;
     return node || link;
+  }
+
+  function preparePreviewLayout(link, cell, slot, titleBlock) {
+    const row = findThreadContainer(link);
+    const table = row && row.closest("table");
+    slot.dataset.spvLayout = table ? "table" : "block";
+    slot.classList.add("spv-title-content");
+    if (titleBlock) titleBlock.classList.add("spv-title-block");
+    if (link) link.classList.add("spv-title-link");
+    updateResponsiveWidth(slot);
+    updateResponsiveWidth(titleBlock);
+    updateResponsiveWidth(link);
+  }
+
+  function schedulePreviewLayout() {
+    if (state.layoutFrame) return;
+    state.layoutFrame = requestAnimationFrame(() => {
+      state.layoutFrame = 0;
+      document.querySelectorAll(`.${CONFIG.slotClass}, .spv-title-block, .spv-title-link`).forEach(updateResponsiveWidth);
+    });
+  }
+
+  function updateResponsiveWidth(node) {
+    if (!node || !document.contains(node)) return;
+    const rect = node.getBoundingClientRect();
+    const drawerWidth = document.documentElement.classList.contains("spv-drawer-open") ? getDrawerWidthPxFromCss() : 0;
+    const available = Math.max(180, window.innerWidth - drawerWidth - rect.left - 12);
+    node.style.setProperty("--spv-available-width", `${Math.floor(available)}px`);
   }
 
   function normalizeSimpleItemLayout(cell, titleLink, slot) {
@@ -1603,6 +1636,7 @@
     document.documentElement.classList.remove("spv-drawer-open", "spv-drawer-resizing");
     document.documentElement.style.removeProperty("--spv-drawer-width");
     document.body.style.paddingRight = state.savedBodyPaddingRight || "";
+    schedulePreviewLayout();
     syncPreviewKeyHandler();
   }
 
@@ -1670,6 +1704,21 @@
         display: none;
       }
 
+      .spv-title-block {
+        max-width: min(100%, var(--spv-available-width, 100%));
+        overflow: hidden;
+        white-space: normal !important;
+      }
+
+      .spv-title-link {
+        display: inline-block;
+        vertical-align: top;
+        max-width: min(100%, var(--spv-available-width, 100%));
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        white-space: normal !important;
+      }
+
       .${CONFIG.slotClass} {
         clear: both;
         display: block;
@@ -1681,9 +1730,9 @@
 
       .${CONFIG.excerptClass} {
         display: -webkit-box;
-        width: calc(100vw - 420px);
+        width: var(--spv-available-width, 100%);
         min-width: 180px;
-        max-width: 100%;
+        max-width: min(100%, var(--spv-available-width, 100%));
         margin: 4px 0 2px;
         overflow: hidden;
         -webkit-box-orient: vertical;
@@ -1704,9 +1753,9 @@
         flex-wrap: nowrap;
         align-items: flex-start;
         gap: 6px;
-        width: calc(100vw - 420px);
+        width: var(--spv-available-width, 100%);
         min-width: 180px;
-        max-width: 100%;
+        max-width: min(100%, var(--spv-available-width, 100%));
         margin: 6px 0 2px;
         padding: 3px 1px 4px;
         overflow-x: auto;
@@ -1735,6 +1784,7 @@
         .${CONFIG.stripClass} {
           width: 100%;
           min-width: 0;
+          max-width: 100%;
         }
       }
 
