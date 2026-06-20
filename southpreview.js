@@ -1312,7 +1312,6 @@
 
   function openLightbox(media) {
     closeLightbox();
-    closeDrawer();
 
     const overlay = document.createElement("div");
     overlay.className = "spv-lightbox";
@@ -1352,7 +1351,7 @@
     overlay.appendChild(footer);
     document.body.appendChild(overlay);
     document.documentElement.classList.add("spv-lightbox-open");
-    document.addEventListener("keydown", handleLightboxKey);
+    syncPreviewKeyHandler();
   }
 
   function openTitlePreview(url, title, mode) {
@@ -1422,7 +1421,7 @@
     overlay.appendChild(close);
     document.body.appendChild(overlay);
     document.documentElement.classList.add("spv-lightbox-open");
-    document.addEventListener("keydown", handleLightboxKey);
+    syncPreviewKeyHandler();
   }
 
   function openThreadDrawer(url, title) {
@@ -1439,7 +1438,7 @@
       else existing.appendChild(nextShell);
       document.documentElement.classList.add("spv-drawer-open");
       setDrawerWidthPx(width);
-      document.addEventListener("keydown", handleLightboxKey);
+      syncPreviewKeyHandler();
       return;
     }
 
@@ -1466,7 +1465,7 @@
     requestAnimationFrame(() => {
       drawer.classList.add("spv-drawer-visible");
     });
-    document.addEventListener("keydown", handleLightboxKey);
+    syncPreviewKeyHandler();
   }
 
   function createDrawerCloseButton() {
@@ -1595,7 +1594,7 @@
       overlay.remove();
     }
     document.documentElement.classList.remove("spv-lightbox-open");
-    document.removeEventListener("keydown", handleLightboxKey);
+    syncPreviewKeyHandler();
   }
 
   function closeDrawer() {
@@ -1604,13 +1603,22 @@
     document.documentElement.classList.remove("spv-drawer-open", "spv-drawer-resizing");
     document.documentElement.style.removeProperty("--spv-drawer-width");
     document.body.style.paddingRight = state.savedBodyPaddingRight || "";
-    document.removeEventListener("keydown", handleLightboxKey);
+    syncPreviewKeyHandler();
   }
 
   function handleLightboxKey(event) {
     if (event.key !== "Escape") return;
-    closeLightbox();
+    if (document.querySelector(".spv-lightbox")) {
+      closeLightbox();
+      return;
+    }
     closeDrawer();
+  }
+
+  function syncPreviewKeyHandler() {
+    const hasPreview = document.querySelector(".spv-lightbox, .spv-drawer");
+    const method = hasPreview ? "addEventListener" : "removeEventListener";
+    document[method]("keydown", handleLightboxKey);
   }
 
   function removeExisting(item) {
