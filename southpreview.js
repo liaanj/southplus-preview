@@ -430,6 +430,7 @@
     document.documentElement.style.setProperty("--spv-drawer-width", `${next}px`);
     document.body.style.paddingRight = `${next}px`;
     schedulePreviewLayout();
+    updateDrawerFrameMode(next);
     return next;
   }
 
@@ -1396,7 +1397,7 @@
     openThreadIframe(url, title);
   }
 
-  function createThreadFrameShell(url, title) {
+  function createThreadFrameShell(url, title, options = {}) {
     const shell = document.createElement("div");
     shell.className = "spv-iframe-shell";
 
@@ -1425,6 +1426,7 @@
     iframe.referrerPolicy = "no-referrer-when-downgrade";
     iframe.setAttribute("allowfullscreen", "allowfullscreen");
     iframe.title = title || "帖子详情";
+    if (options.drawer) iframe.addEventListener("load", () => adaptDrawerFrame(iframe));
     body.appendChild(iframe);
 
     shell.appendChild(header);
@@ -1464,7 +1466,7 @@
     const existing = document.querySelector(".spv-drawer");
     if (existing) {
       const oldShell = existing.querySelector(".spv-iframe-shell");
-      const nextShell = createThreadFrameShell(url, title);
+      const nextShell = createThreadFrameShell(url, title, { drawer: true });
       const close = createDrawerCloseButton();
       nextShell.appendChild(close);
       if (oldShell) oldShell.replaceWith(nextShell);
@@ -1485,7 +1487,7 @@
     resizer.title = "拖动调整宽度";
     resizer.addEventListener("pointerdown", startDrawerResize);
 
-    const shell = createThreadFrameShell(url, title);
+    const shell = createThreadFrameShell(url, title, { drawer: true });
     const close = createDrawerCloseButton();
 
     shell.appendChild(close);
@@ -1499,6 +1501,168 @@
       drawer.classList.add("spv-drawer-visible");
     });
     syncPreviewKeyHandler();
+  }
+
+  function adaptDrawerFrame(iframe) {
+    let doc;
+    try {
+      doc = iframe.contentDocument;
+    } catch (error) {
+      debugWarn("drawer iframe access denied", error);
+      return;
+    }
+    if (!doc || !doc.documentElement) return;
+
+    doc.documentElement.classList.add("spv-drawer-frame");
+    updateDrawerFrameMode(null, doc);
+    markDrawerFrameContent(doc);
+
+    if (doc.getElementById("spv-drawer-frame-style")) return;
+
+    const style = doc.createElement("style");
+    style.id = "spv-drawer-frame-style";
+    style.textContent = `
+      html.spv-drawer-frame,
+      html.spv-drawer-frame body {
+        max-width: 100% !important;
+        overflow-x: hidden !important;
+      }
+
+      html.spv-drawer-frame #wrapA,
+      html.spv-drawer-frame #main,
+      html.spv-drawer-frame .t,
+      html.spv-drawer-frame .t5,
+      html.spv-drawer-frame .t2,
+      html.spv-drawer-frame table.js-post {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        box-sizing: border-box !important;
+      }
+
+      html.spv-drawer-frame .spv-drawer-author-cell {
+        width: 96px !important;
+        max-width: 96px !important;
+        min-width: 96px !important;
+        overflow: hidden !important;
+        box-sizing: border-box !important;
+      }
+
+      html.spv-drawer-frame .spv-drawer-author-cell .user-pic,
+      html.spv-drawer-frame .spv-drawer-author-cell .user-pic table,
+      html.spv-drawer-frame .spv-drawer-author-cell .user-pic tbody,
+      html.spv-drawer-frame .spv-drawer-author-cell .user-pic tr,
+      html.spv-drawer-frame .spv-drawer-author-cell .user-pic td,
+      html.spv-drawer-frame .spv-drawer-author-cell .user-pic a {
+        display: block !important;
+        width: 72px !important;
+        max-width: 72px !important;
+        min-width: 72px !important;
+        height: 72px !important;
+        max-height: 72px !important;
+        margin: 0 auto !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+        box-sizing: border-box !important;
+      }
+
+      html.spv-drawer-frame .spv-drawer-avatar {
+        display: block !important;
+        width: 72px !important;
+        height: 72px !important;
+        max-width: none !important;
+        min-width: 72px !important;
+        max-height: 72px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        object-fit: cover !important;
+        object-position: center !important;
+      }
+
+      html.spv-drawer-frame.spv-drawer-frame-compact .spv-drawer-author-cell {
+        display: none !important;
+      }
+
+      html.spv-drawer-frame.spv-drawer-frame-compact table.js-post th[id^="td_"] {
+        display: block !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+      }
+
+      html.spv-drawer-frame .spv-drawer-content {
+        display: block !important;
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: calc(100vw - 24px) !important;
+        box-sizing: border-box !important;
+        overflow-wrap: anywhere !important;
+        word-break: break-word !important;
+        white-space: normal !important;
+      }
+
+      html.spv-drawer-frame .spv-drawer-content * {
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+      }
+
+      html.spv-drawer-frame .spv-drawer-content img,
+      html.spv-drawer-frame .spv-drawer-content video,
+      html.spv-drawer-frame .spv-drawer-content iframe,
+      html.spv-drawer-frame .spv-drawer-content embed,
+      html.spv-drawer-frame .spv-drawer-content object {
+        height: auto !important;
+      }
+
+      html.spv-drawer-frame .spv-drawer-content pre,
+      html.spv-drawer-frame .spv-drawer-content code,
+      html.spv-drawer-frame .spv-drawer-content table,
+      html.spv-drawer-frame .spv-drawer-content blockquote,
+      html.spv-drawer-frame .spv-drawer-content .quote,
+      html.spv-drawer-frame .spv-drawer-content .blockquote {
+        max-width: 100% !important;
+        overflow-x: auto !important;
+        white-space: pre-wrap !important;
+      }
+    `;
+    (doc.head || doc.documentElement).appendChild(style);
+
+    if (!doc.documentElement.dataset.spvDrawerObserved) {
+      doc.documentElement.dataset.spvDrawerObserved = "1";
+      new MutationObserver(() => markDrawerFrameContent(doc)).observe(doc.body || doc.documentElement, { childList: true, subtree: true });
+    }
+  }
+
+  function markDrawerFrameContent(doc) {
+    doc.querySelectorAll("#read_tpc, .tpc_content").forEach((node) => {
+      node.classList.add("spv-drawer-content");
+    });
+    doc.querySelectorAll("table.js-post").forEach((table) => {
+      const authorCell = table.querySelector("tr:first-child > th:first-child[rowspan]");
+      if (authorCell) authorCell.classList.add("spv-drawer-author-cell");
+    });
+    doc.querySelectorAll(".spv-drawer-author-cell .user-pic img").forEach((img) => {
+      img.classList.add("spv-drawer-avatar");
+    });
+  }
+
+  function updateDrawerFrameMode(width, doc) {
+    const frameDoc = doc || getDrawerFrameDocument();
+    if (!frameDoc || !frameDoc.documentElement) return;
+    const drawerWidth = Number.isFinite(width) ? width : getDrawerWidthPxFromCss();
+    frameDoc.documentElement.classList.toggle("spv-drawer-frame-compact", drawerWidth < 620);
+  }
+
+  function getDrawerFrameDocument() {
+    const iframe = document.querySelector(".spv-drawer iframe");
+    if (!iframe) return null;
+    try {
+      return iframe.contentDocument;
+    } catch (error) {
+      debugWarn("drawer iframe access denied", error);
+      return null;
+    }
   }
 
   function createDrawerCloseButton() {
